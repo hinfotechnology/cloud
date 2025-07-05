@@ -1,0 +1,13 @@
+policies:
+  - name: rds-unencrypted
+    resource: aws.rds
+    description: |
+      Identifies RDS instances that are not encrypted.
+    filters:
+      - type: value
+        key: StorageEncrypted
+        value: false
+    actions:
+      - type: tag
+        key: NonCompliant
+        value: "Unencrypted"

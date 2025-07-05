@@ -1,0 +1,21 @@
+policies:
+  - name: ec2-tag-compliance
+    resource: aws.ec2
+    description: |
+      Identifies EC2 instances that are missing required tags
+      and tags them for future action.
+    filters:
+      - type: instance-state
+        state: running
+      - or:
+        - "tag:Environment": absent
+        - "tag:Owner": absent
+        - "tag:CostCenter": absent
+    actions:
+      - type: tag
+        key: NonCompliant
+        value: "True"
+      - type: mark-for-op
+        op: stop
+        days: 7
+        tag: custodian_cleanup

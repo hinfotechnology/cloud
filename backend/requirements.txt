@@ -1,0 +1,10 @@
+fastapi==0.103.1
+uvicorn==0.23.2
+boto3>=1.12.31,<2.0.0
+pydantic==2.3.0
+python-multipart==0.0.6
+c7n==0.9.45
+python-jose==3.3.0
+passlib==1.7.4
+python-dotenv==1.0.0
+pyOpenSSL>=23.0.0

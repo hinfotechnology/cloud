@@ -1,0 +1,18 @@
+policies:
+  - name: ebs-unattached
+    resource: aws.ebs
+    description: |
+      Find unattached EBS volumes older than 30 days 
+      and mark them for deletion.
+    filters:
+      - type: value
+        key: "Attachments"
+        value: []
+      - type: age
+        days: 30
+        op: gt
+    actions:
+      - type: mark-for-op
+        tag: custodian_cleanup
+        op: delete
+        days: 7

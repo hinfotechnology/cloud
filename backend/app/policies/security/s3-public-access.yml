@@ -1,0 +1,15 @@
+policies:
+  - name: s3-public-access
+    resource: aws.s3
+    description: |
+      Finds S3 buckets with public access (either ACL or policy)
+      and logs them for review.
+    filters:
+      - or:
+        - type: global-grants
+        - type: cross-account
+    actions:
+      - type: notify
+        template: s3-public-access
+        priority_header: '1'
+        subject: "S3 Bucket with Public Access Found: {account}/{region}/{bucket_name}"

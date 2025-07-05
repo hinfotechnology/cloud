@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: cloud-custodian-ui-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/app:/app/app
+      - ./outputs:/app/outputs
+    environment:
+      - PORT=8000
+      - HOST=0.0.0.0
+      - RELOAD=False
+    networks:
+      - cloud-custodian-network
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    container_name: cloud-custodian-ui-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - cloud-custodian-network
+
+networks:
+  cloud-custodian-network:
+    driver: bridge
