@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import aws, policies, custodian
+from app.routers import aws, policies, custodian, auth
 import os
 
 app = FastAPI(
@@ -29,6 +29,7 @@ app.add_middleware(
 app.include_router(aws.router, prefix="/api/aws", tags=["AWS"])
 app.include_router(policies.router, prefix="/api/policies", tags=["Policies"])
 app.include_router(custodian.router, prefix="/api/custodian", tags=["Custodian"])
+app.include_router(auth.router, prefix="/api", tags=["Authentication"])
 
 @app.get("/")
 async def root():

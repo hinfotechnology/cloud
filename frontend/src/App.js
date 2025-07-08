@@ -1,24 +1,29 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import Dashboard from './pages/Dashboard';
 import Login from './pages/Login';
+import SSOCallback from './pages/SSOCallback';
 import Layout from './components/Layout';
 import ResourcesPage from './pages/ResourcesPage';
 import PoliciesPage from './pages/PoliciesPage';
 import PolicyRunPage from './pages/PolicyRunPage';
 import ResourceDetailPage from './pages/ResourceDetailPage';
+import ServiceCostsPage from './pages/ServiceCostsPage';
 import { useAWSCredentials } from './context/AWSCredentialsContext';
+import { useSSOAuth } from './context/SSOAuthContext';
 
 function App() {
   const { credentials } = useAWSCredentials();
+  const { isAuthenticated } = useSSOAuth();
   
-  // Simple route protection based on credentials
+  // Route protection based on AWS credentials or SSO authentication
   const ProtectedRoute = ({ children }) => {
-    return credentials ? children : <Navigate to="/" replace />;
+    return credentials || isAuthenticated ? children : <Navigate to="/" replace />;
   };
 
   return (
     <Routes>
       <Route path="/" element={<Login />} />
+      <Route path="/auth/callback" element={<SSOCallback />} />
       <Route path="/dashboard" element={
         <ProtectedRoute>
           <Layout>
@@ -51,6 +56,13 @@ function App() {
         <ProtectedRoute>
           <Layout>
             <PolicyRunPage />
+          </Layout>
+        </ProtectedRoute>
+      } />
+      <Route path="/service-costs" element={
+        <ProtectedRoute>
+          <Layout>
+            <ServiceCostsPage />
           </Layout>
         </ProtectedRoute>
       } />

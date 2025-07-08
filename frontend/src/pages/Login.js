@@ -1,132 +1,211 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useForm } from 'react-hook-form';
-import { toast } from 'react-toastify';
-import { validateAWSCredentials } from '../services/api';
 import { useAWSCredentials } from '../context/AWSCredentialsContext';
+import { useSSOAuth } from '../context/SSOAuthContext';
+import { validateAWSCredentials } from '../services/api';
+import { toast } from 'react-toastify';
 
 const Login = () => {
+  const [accessKey, setAccessKey] = useState('');
+  const [secretKey, setSecretKey] = useState('');
+  const [sessionToken, setSessionToken] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const navigate = useNavigate();
   const { setAWSCredentials } = useAWSCredentials();
-  
-  const { register, handleSubmit, formState: { errors } } = useForm({
-    defaultValues: {
-      access_key: '',
-      secret_key: '',
-      region: 'us-east-1'
+  const { ssoConfig, initiateSSOLogin, isAuthenticated } = useSSOAuth();
+  const navigate = useNavigate();
+
+  // Redirect to dashboard if already authenticated
+  useEffect(() => {
+    if (isAuthenticated) {
+      navigate('/dashboard');
     }
-  });
-  
-  const onSubmit = async (data) => {
+  }, [isAuthenticated, navigate]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
     setIsLoading(true);
-    
+
     try {
-      const result = await validateAWSCredentials(data);
-      
-      if (result.valid) {
-        toast.success('AWS credentials validated successfully!');
-        setAWSCredentials(data);
+      // Validate inputs
+      if (!accessKey || !secretKey) {
+        throw new Error('Access Key and Secret Key are required');
+      }
+
+      const awsCredentials = {
+        access_key: accessKey, // Changed to match backend schema
+        secret_key: secretKey, // Changed to match backend schema
+        region: 'us-east-1', // Default region
+        session_token: sessionToken || undefined
+      };
+
+      try {
+        // Validate the credentials with the backend
+        await validateAWSCredentials(awsCredentials);
+        
+        // Set credentials in context (keep original format for frontend context)
+        setAWSCredentials({
+          accessKey,
+          secretKey,
+          sessionToken: sessionToken || undefined
+        });
+        
+        toast.success('AWS credentials validated successfully');
         navigate('/dashboard');
-      } else {
-        toast.error('Invalid AWS credentials. Please check and try again.');
+      } catch (apiError) {
+        console.error('AWS validation error:', apiError);
+        toast.error(`AWS validation failed: ${apiError.message || 'Invalid credentials'}`);
+        throw new Error('Invalid AWS credentials');
       }
     } catch (error) {
-      toast.error(`Authentication failed: ${error.message}`);
+      toast.error(`Login failed: ${error.message || 'Unknown error'}`);
     } finally {
       setIsLoading(false);
     }
   };
 
+  const handleSSOLogin = (provider) => {
+    initiateSSOLogin(provider);
+  };
+
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
+    <div className="min-h-screen bg-gray-100 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md">
         <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
           Cloud Custodian UI
         </h2>
         <p className="mt-2 text-center text-sm text-gray-600">
-          Enter your AWS credentials to get started
+          Manage and monitor your AWS resources
         </p>
       </div>
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
         <div className="bg-white py-8 px-4 shadow sm:rounded-lg sm:px-10">
-          <form className="space-y-6" onSubmit={handleSubmit(onSubmit)}>
-            <div>
-              <label htmlFor="access_key" className="block text-sm font-medium text-gray-700">
-                AWS Access Key
-              </label>
-              <div className="mt-1">
-                <input
-                  id="access_key"
-                  type="text"
-                  autoComplete="off"
-                  {...register('access_key', { required: 'Access Key is required' })}
-                  className="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                />
-                {errors.access_key && (
-                  <p className="mt-2 text-sm text-red-600">{errors.access_key.message}</p>
+          {/* AWS Credentials Login Form */}
+          {(!ssoConfig || ssoConfig.use_legacy_auth) && (
+            <>
+              <h3 className="text-lg font-medium text-gray-900 mb-4">
+                Login with AWS Credentials
+              </h3>
+              <form onSubmit={handleSubmit}>
+                <div>
+                  <label htmlFor="accessKey" className="block text-sm font-medium text-gray-700">
+                    Access Key
+                  </label>
+                  <div className="mt-1">
+                    <input
+                      id="accessKey"
+                      name="accessKey"
+                      type="text"
+                      required
+                      value={accessKey}
+                      onChange={(e) => setAccessKey(e.target.value)}
+                      className="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                    />
+                  </div>
+                </div>
+
+                <div className="mt-4">
+                  <label htmlFor="secretKey" className="block text-sm font-medium text-gray-700">
+                    Secret Key
+                  </label>
+                  <div className="mt-1">
+                    <input
+                      id="secretKey"
+                      name="secretKey"
+                      type="password"
+                      required
+                      value={secretKey}
+                      onChange={(e) => setSecretKey(e.target.value)}
+                      className="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                    />
+                  </div>
+                </div>
+
+                <div className="mt-4">
+                  <label htmlFor="sessionToken" className="block text-sm font-medium text-gray-700">
+                    Session Token (optional)
+                  </label>
+                  <div className="mt-1">
+                    <input
+                      id="sessionToken"
+                      name="sessionToken"
+                      type="password"
+                      value={sessionToken}
+                      onChange={(e) => setSessionToken(e.target.value)}
+                      className="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                    />
+                  </div>
+                </div>
+
+                <div className="mt-6">
+                  <button
+                    type="submit"
+                    disabled={isLoading}
+                    className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                  >
+                    {isLoading ? 'Validating...' : 'Login'}
+                  </button>
+                </div>
+              </form>
+            </>
+          )}
+
+          {/* SSO Login Options */}
+          <div className="mt-8 border-t pt-6">
+            <h3 className="text-lg font-medium text-gray-900 mb-4">
+              Login with Single Sign-On
+            </h3>
+            <div className="space-y-3">
+              {/* Show status of SSO config for debugging */}
+              <div className="text-sm text-gray-500 mb-4">
+                SSO Config Status: {ssoConfig ? 'Loaded' : 'Not Loaded'}
+                {ssoConfig && (
+                  <>
+                    <br />
+                    SSO Enabled: {ssoConfig.enabled ? 'Yes' : 'No'}
+                    <br />
+                    Providers: {ssoConfig.providers ? ssoConfig.providers.length : '0'} 
+                  </>
                 )}
               </div>
-            </div>
-
-            <div>
-              <label htmlFor="secret_key" className="block text-sm font-medium text-gray-700">
-                AWS Secret Key
-              </label>
-              <div className="mt-1">
-                <input
-                  id="secret_key"
-                  type="password"
-                  autoComplete="off"
-                  {...register('secret_key', { required: 'Secret Key is required' })}
-                  className="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                />
-                {errors.secret_key && (
-                  <p className="mt-2 text-sm text-red-600">{errors.secret_key.message}</p>
-                )}
-              </div>
-            </div>
-
-            <div>
-              <label htmlFor="region" className="block text-sm font-medium text-gray-700">
-                AWS Region
-              </label>
-              <div className="mt-1">
-                <select
-                  id="region"
-                  {...register('region')}
-                  className="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                >
-                  <option value="us-east-1">US East (N. Virginia)</option>
-                  <option value="us-east-2">US East (Ohio)</option>
-                  <option value="us-west-1">US West (N. California)</option>
-                  <option value="us-west-2">US West (Oregon)</option>
-                  <option value="eu-west-1">EU (Ireland)</option>
-                  <option value="eu-central-1">EU (Frankfurt)</option>
-                  <option value="ap-northeast-1">Asia Pacific (Tokyo)</option>
-                  <option value="ap-southeast-1">Asia Pacific (Singapore)</option>
-                  <option value="ap-southeast-2">Asia Pacific (Sydney)</option>
-                </select>
-              </div>
-            </div>
-
-            <div>
+              
+              {/* Fallback buttons if config isn't working properly */}
               <button
-                type="submit"
-                disabled={isLoading}
-                className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+                onClick={() => handleSSOLogin('azure')}
+                className="w-full flex justify-center py-2 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
               >
-                {isLoading ? 'Validating...' : 'Connect to AWS'}
+                Azure AD
               </button>
+              <button
+                onClick={() => handleSSOLogin('okta')}
+                className="w-full flex justify-center py-2 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+              >
+                Okta
+              </button>
+              <button
+                onClick={() => handleSSOLogin('aws')}
+                className="w-full flex justify-center py-2 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+              >
+                AWS SSO
+              </button>
+              
+              {/* Dynamic providers if config loaded properly */}
+              {ssoConfig && ssoConfig.enabled && ssoConfig.providers && ssoConfig.providers.length > 0 && (
+                <div className="mt-4">
+                  <h4 className="text-sm font-medium text-gray-700 mb-2">Configured Providers:</h4>
+                  {ssoConfig.providers.map((provider) => (
+                    <button
+                      key={provider.id}
+                      onClick={() => handleSSOLogin(provider.id)}
+                      className="w-full flex justify-center py-2 px-4 mt-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                    >
+                      {provider.name}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-            
-            <div className="text-sm text-center text-gray-500">
-              <p>
-                Credentials are used temporarily and never stored permanently.
-              </p>
-            </div>
-          </form>
+          </div>
         </div>
       </div>
     </div>

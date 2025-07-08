@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useAWSCredentials } from '../context/AWSCredentialsContext';
+// Removed unused import: useSSOAuth
 import { getResourceSummary } from '../services/api';
+import SSOStatus from '../components/SSOStatus';
 import { toast } from 'react-toastify';
 import { Bar } from 'react-chartjs-2';
 import {
@@ -101,6 +103,11 @@ const Dashboard = () => {
             Overview of your AWS resources across multiple services.
           </p>
         </div>
+      </div>
+
+      {/* SSO Authentication Status */}
+      <div className="mt-4 px-4 sm:px-6 lg:px-8">
+        <SSOStatus />
       </div>
 
       <div className="mt-6">

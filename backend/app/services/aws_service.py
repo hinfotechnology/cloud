@@ -184,8 +184,13 @@ class AWSService:
                             
         return tag_dict
         
-    async def get_service_cost(self, service: str) -> Dict[str, Any]:
-        """Get cost data for a specific service"""
+    async def get_service_cost(self, service: str, period: str = None) -> Dict[str, Any]:
+        """Get cost data for a specific service for different time periods
+        
+        Args:
+            service: The AWS service name
+            period: Time period for cost data ('1m', '3m', '6m', or None for all periods)
+        """
         session = self._get_session()
         
         try:
@@ -196,7 +201,11 @@ class AWSService:
                 'ec2': 'Amazon Elastic Compute Cloud - Compute',
                 's3': 'Amazon Simple Storage Service',
                 'rds': 'Amazon Relational Database Service',
-                'lambda': 'AWS Lambda'
+                'lambda': 'AWS Lambda',
+                'ebs': 'Amazon Elastic Block Store',
+                'cloudwatch': 'AmazonCloudWatch',
+                'dynamodb': 'Amazon DynamoDB'
+                # Add more services as needed
             }
             
             if service not in service_map:
@@ -204,34 +213,356 @@ class AWSService:
                 
             service_name = service_map[service]
             
-            # Get cost data for the last 30 days
+            # Get cost data for different time periods
             import datetime
             end = datetime.datetime.utcnow()
-            start = end - datetime.timedelta(days=30)
             
-            response = cost_explorer.get_cost_and_usage(
-                TimePeriod={
-                    'Start': start.strftime('%Y-%m-%d'),
-                    'End': end.strftime('%Y-%m-%d')
-                },
-                Granularity='DAILY',
-                Metrics=['UnblendedCost'],
-                GroupBy=[
-                    {
-                        'Type': 'DIMENSION',
-                        'Key': 'SERVICE'
+            # Define periods
+            periods = {
+                '1m': {'days': 30, 'name': 'Last Month', 'granularity': 'DAILY'},
+                '3m': {'days': 90, 'name': 'Last 3 Months', 'granularity': 'MONTHLY'},
+                '6m': {'days': 180, 'name': 'Last 6 Months', 'granularity': 'MONTHLY'}
+            }
+            
+            results = {}
+            
+            # Determine which periods to process
+            if period and period in periods:
+                period_keys = [period]
+            else:
+                period_keys = list(periods.keys())
+                
+            for period_key in period_keys:
+                period_info = periods[period_key]
+                start = end - datetime.timedelta(days=period_info['days'])
+                
+                response = cost_explorer.get_cost_and_usage(
+                    TimePeriod={
+                        'Start': start.strftime('%Y-%m-%d'),
+                        'End': end.strftime('%Y-%m-%d')
+                    },
+                    Granularity=period_info['granularity'],
+                    Metrics=['UnblendedCost', 'UsageQuantity'],
+                    GroupBy=[
+                        {
+                            'Type': 'DIMENSION',
+                            'Key': 'SERVICE'
+                        }
+                    ],
+                    Filter={
+                        'Dimensions': {
+                            'Key': 'SERVICE',
+                            'Values': [service_name]
+                        }
                     }
-                ],
-                Filter={
-                    'Dimensions': {
-                        'Key': 'SERVICE',
-                        'Values': [service_name]
-                    }
+                )
+                
+                # Process the response to extract useful information
+                time_periods = response.get('ResultsByTime', [])
+                
+                processed_data = {
+                    'period': period_info['name'],
+                    'start_date': start.strftime('%Y-%m-%d'),
+                    'end_date': end.strftime('%Y-%m-%d'),
+                    'data_points': []
                 }
-            )
+                
+                total_cost = 0
+                
+                for time_period in time_periods:
+                    period_start = time_period.get('TimePeriod', {}).get('Start')
+                    period_end = time_period.get('TimePeriod', {}).get('End')
+                    
+                    groups = time_period.get('Groups', [])
+                    
+                    if groups:
+                        for group in groups:
+                            metrics = group.get('Metrics', {})
+                            cost = float(metrics.get('UnblendedCost', {}).get('Amount', 0))
+                            total_cost += cost
+                            
+                            data_point = {
+                                'start_date': period_start,
+                                'end_date': period_end,
+                                'cost': cost,
+                                'unit': metrics.get('UnblendedCost', {}).get('Unit', 'USD')
+                            }
+                            
+                            processed_data['data_points'].append(data_point)
+                    
+                processed_data['total_cost'] = total_cost
+                results[period_key] = processed_data
             
-            return response
+            return results
             
         except Exception as e:
             logger.error(f"Error getting cost data: {str(e)}")
             return {"error": f"Error retrieving cost data: {str(e)}"}
+        
+    async def get_resource_details(self, service: str) -> Dict[str, Any]:
+        """Get detailed features and information for a specific AWS service"""
+        session = self._get_session()
+        details = {}
+        
+        try:
+            if service == 'ec2':
+                # EC2 detailed info
+                ec2 = session.resource('ec2')
+                client = session.client('ec2')
+                
+                # Get instance details
+                instances = list(ec2.instances.all())
+                instance_details = []
+                
+                for instance in instances:
+                    try:
+                        instance_info = {
+                            'id': instance.id,
+                            'instance_type': instance.instance_type,
+                            'state': instance.state['Name'],
+                            'launch_time': instance.launch_time.isoformat() if hasattr(instance, 'launch_time') else None,
+                            'public_ip': instance.public_ip_address,
+                            'private_ip': instance.private_ip_address,
+                            'vpc_id': instance.vpc_id,
+                            'subnet_id': instance.subnet_id,
+                            'tags': {t['Key']: t['Value'] for t in instance.tags} if instance.tags else {},
+                            'security_groups': [sg['GroupName'] for sg in instance.security_groups] if hasattr(instance, 'security_groups') else [],
+                            'iam_profile': instance.iam_instance_profile['Arn'] if instance.iam_instance_profile else None,
+                            'platform': instance.platform,
+                            'architecture': instance.architecture,
+                            'root_device_name': instance.root_device_name,
+                            'root_device_type': instance.root_device_type
+                        }
+                        instance_details.append(instance_info)
+                    except Exception as e:
+                        logger.error(f"Error getting details for instance {instance.id}: {str(e)}")
+                        instance_details.append({'id': instance.id, 'error': str(e)})
+                
+                # Get VPC details
+                vpcs = list(ec2.vpcs.all())
+                vpc_details = []
+                
+                for vpc in vpcs:
+                    try:
+                        vpc_info = {
+                            'id': vpc.id,
+                            'cidr_block': vpc.cidr_block,
+                            'is_default': vpc.is_default,
+                            'tags': {t['Key']: t['Value'] for t in vpc.tags} if vpc.tags else {}
+                        }
+                        vpc_details.append(vpc_info)
+                    except Exception as e:
+                        logger.error(f"Error getting details for VPC {vpc.id}: {str(e)}")
+                        vpc_details.append({'id': vpc.id, 'error': str(e)})
+                
+                # Get Security Group details
+                security_groups = list(ec2.security_groups.all())
+                sg_details = []
+                
+                for sg in security_groups:
+                    try:
+                        sg_info = {
+                            'id': sg.id,
+                            'name': sg.group_name,
+                            'description': sg.description,
+                            'vpc_id': sg.vpc_id,
+                            'inbound_rules': [
+                                {
+                                    'protocol': rule.get('IpProtocol'),
+                                    'from_port': rule.get('FromPort'),
+                                    'to_port': rule.get('ToPort'),
+                                    'ip_ranges': [r.get('CidrIp') for r in rule.get('IpRanges', [])]
+                                }
+                                for rule in sg.ip_permissions
+                            ],
+                            'tags': {t['Key']: t['Value'] for t in sg.tags} if sg.tags else {}
+                        }
+                        sg_details.append(sg_info)
+                    except Exception as e:
+                        logger.error(f"Error getting details for Security Group {sg.id}: {str(e)}")
+                        sg_details.append({'id': sg.id, 'error': str(e)})
+                
+                details = {
+                    'instances': instance_details,
+                    'vpcs': vpc_details,
+                    'security_groups': sg_details
+                }
+                
+            elif service == 's3':
+                # S3 detailed info
+                s3 = session.resource('s3')
+                client = session.client('s3')
+                
+                buckets = list(s3.buckets.all())
+                bucket_details = []
+                
+                for bucket in buckets:
+                    try:
+                        # Get bucket info
+                        location = client.get_bucket_location(Bucket=bucket.name)
+                        region = location['LocationConstraint'] or 'us-east-1'
+                        
+                        # Get bucket policy status
+                        policy_status = {'public': False}
+                        try:
+                            policy_status = client.get_bucket_policy_status(Bucket=bucket.name).get('PolicyStatus', {'public': False})
+                        except Exception:
+                            pass
+                        
+                        # Get encryption
+                        encryption = {'enabled': False}
+                        try:
+                            encryption_config = client.get_bucket_encryption(Bucket=bucket.name)
+                            encryption = {
+                                'enabled': True, 
+                                'type': encryption_config.get('ServerSideEncryptionConfiguration', {}).get('Rules', [{}])[0].get('ServerSideEncryptionByDefault', {}).get('SSEAlgorithm')
+                            }
+                        except Exception:
+                            pass
+                            
+                        bucket_info = {
+                            'name': bucket.name,
+                            'creation_date': bucket.creation_date.isoformat() if hasattr(bucket, 'creation_date') else None,
+                            'region': region,
+                            'public': policy_status.get('IsPublic', False),
+                            'encryption': encryption,
+                            'versioning': bucket.Versioning().status if hasattr(bucket, 'Versioning') else 'Disabled',
+                        }
+                        bucket_details.append(bucket_info)
+                    except Exception as e:
+                        logger.error(f"Error getting details for bucket {bucket.name}: {str(e)}")
+                        bucket_details.append({'name': bucket.name, 'error': str(e)})
+                
+                details = {
+                    'buckets': bucket_details
+                }
+                
+            elif service == 'rds':
+                # RDS detailed info
+                client = session.client('rds')
+                
+                instances = client.describe_db_instances()
+                instance_details = []
+                
+                for instance in instances.get('DBInstances', []):
+                    try:
+                        instance_info = {
+                            'id': instance['DBInstanceIdentifier'],
+                            'engine': instance['Engine'],
+                            'engine_version': instance['EngineVersion'],
+                            'status': instance['DBInstanceStatus'],
+                            'endpoint': instance.get('Endpoint', {}).get('Address'),
+                            'port': instance.get('Endpoint', {}).get('Port'),
+                            'storage': {
+                                'type': instance.get('StorageType'),
+                                'size': instance.get('AllocatedStorage'),
+                                'encrypted': instance.get('StorageEncrypted', False)
+                            },
+                            'instance_type': instance.get('DBInstanceClass'),
+                            'multi_az': instance.get('MultiAZ', False),
+                            'publicly_accessible': instance.get('PubliclyAccessible', False),
+                            'vpc_id': instance.get('DBSubnetGroup', {}).get('VpcId')
+                        }
+                        instance_details.append(instance_info)
+                    except Exception as e:
+                        logger.error(f"Error getting details for RDS instance {instance.get('DBInstanceIdentifier')}: {str(e)}")
+                        instance_details.append({'id': instance.get('DBInstanceIdentifier'), 'error': str(e)})
+                
+                details = {
+                    'instances': instance_details
+                }
+                
+            elif service == 'lambda':
+                # Lambda detailed info
+                client = session.client('lambda')
+                
+                response = client.list_functions()
+                function_details = []
+                
+                for func in response.get('Functions', []):
+                    try:
+                        function_info = {
+                            'name': func['FunctionName'],
+                            'runtime': func['Runtime'],
+                            'memory': func['MemorySize'],
+                            'timeout': func['Timeout'],
+                            'last_modified': func['LastModified'],
+                            'handler': func['Handler'],
+                            'version': func['Version'],
+                            'role': func['Role'],
+                            'code_size': func['CodeSize'],
+                            'description': func.get('Description', '')
+                        }
+                        function_details.append(function_info)
+                    except Exception as e:
+                        logger.error(f"Error getting details for Lambda function {func.get('FunctionName')}: {str(e)}")
+                        function_details.append({'name': func.get('FunctionName'), 'error': str(e)})
+                
+                details = {
+                    'functions': function_details
+                }
+            
+            elif service == 'iam':
+                # IAM detailed info
+                client = session.client('iam')
+                
+                # Get users
+                users_response = client.list_users()
+                user_details = []
+                
+                for user in users_response.get('Users', []):
+                    try:
+                        # Get user groups
+                        groups_response = client.list_groups_for_user(UserName=user['UserName'])
+                        groups = [g['GroupName'] for g in groups_response.get('Groups', [])]
+                        
+                        # Get user policies
+                        policies_response = client.list_attached_user_policies(UserName=user['UserName'])
+                        policies = [p['PolicyName'] for p in policies_response.get('AttachedPolicies', [])]
+                        
+                        user_info = {
+                            'name': user['UserName'],
+                            'id': user['UserId'],
+                            'arn': user['Arn'],
+                            'created': user['CreateDate'].isoformat(),
+                            'password_last_used': user.get('PasswordLastUsed', '').isoformat() if user.get('PasswordLastUsed') else None,
+                            'groups': groups,
+                            'policies': policies
+                        }
+                        user_details.append(user_info)
+                    except Exception as e:
+                        logger.error(f"Error getting details for IAM user {user.get('UserName')}: {str(e)}")
+                        user_details.append({'name': user.get('UserName'), 'error': str(e)})
+                
+                # Get roles
+                roles_response = client.list_roles()
+                role_details = []
+                
+                for role in roles_response.get('Roles', []):
+                    try:
+                        role_info = {
+                            'name': role['RoleName'],
+                            'id': role['RoleId'],
+                            'arn': role['Arn'],
+                            'created': role['CreateDate'].isoformat(),
+                            'description': role.get('Description', ''),
+                            'trust_policy': role.get('AssumeRolePolicyDocument', {})
+                        }
+                        role_details.append(role_info)
+                    except Exception as e:
+                        logger.error(f"Error getting details for IAM role {role.get('RoleName')}: {str(e)}")
+                        role_details.append({'name': role.get('RoleName'), 'error': str(e)})
+                
+                details = {
+                    'users': user_details,
+                    'roles': role_details
+                }
+                
+            else:
+                return {'error': f'Detailed features for {service} not implemented'}
+        
+        except Exception as e:
+            logger.error(f"Error getting detailed features for {service}: {str(e)}")
+            return {'error': str(e)}
+            
+        return details

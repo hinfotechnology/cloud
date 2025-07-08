@@ -1,19 +1,22 @@
 import React, { useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAWSCredentials } from '../context/AWSCredentialsContext';
+import { useSSOAuth } from '../context/SSOAuthContext';
 import {
   Bars3Icon,
   XMarkIcon,
   ChartPieIcon,
   ServerIcon,
   ShieldCheckIcon,
-  ArrowRightOnRectangleIcon
+  ArrowRightOnRectangleIcon,
+  CurrencyDollarIcon
 } from '@heroicons/react/24/outline';
 
 const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: ChartPieIcon },
   { name: 'Resources', href: '/resources', icon: ServerIcon },
   { name: 'Policies', href: '/policies', icon: ShieldCheckIcon },
+  { name: 'Service Costs', href: '/service-costs', icon: CurrencyDollarIcon },
 ];
 
 const Layout = ({ children }) => {
@@ -21,9 +24,17 @@ const Layout = ({ children }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const { credentials, clearAWSCredentials } = useAWSCredentials();
+  const { isAuthenticated, user, logout: ssoLogout } = useSSOAuth();
 
   const handleLogout = () => {
+    // Clear AWS credentials (if any)
     clearAWSCredentials();
+    
+    // Log out from SSO (if authenticated)
+    if (isAuthenticated) {
+      ssoLogout();
+    }
+    
     navigate('/');
   };
 
@@ -106,7 +117,15 @@ const Layout = ({ children }) => {
               <div className="px-4 py-3 bg-white border-t border-gray-200">
                 <div className="flex items-center">
                   <div className="flex-1">
-                    <p className="text-sm font-medium text-gray-900">Region: {credentials?.region}</p>
+                    {isAuthenticated && user ? (
+                      <div>
+                        <p className="text-sm font-medium text-gray-900">{user.name}</p>
+                        <p className="text-xs text-gray-500">{user.email}</p>
+                        <p className="text-xs text-gray-500">Role: {user.role}</p>
+                      </div>
+                    ) : (
+                      <p className="text-sm font-medium text-gray-900">Region: {credentials?.region}</p>
+                    )}
                   </div>
                 </div>
                 <button

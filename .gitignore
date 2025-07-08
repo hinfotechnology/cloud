@@ -1,0 +1,75 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+backend/venv/
+backend/.venv/
+**/__pycache__/
+backend/**/__pycache__/
+backend/**/*.py[cod]
+backend/**/*$py.class
+backend/**/*.so
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+backend/.env
+frontend/.env
+
+# Build files
+frontend/build/
+frontend/dist/
+backend/dist/
+backend/build/
+
+# Coverage reports
+coverage/
+frontend/coverage/
+backend/.coverage
+backend/htmlcov/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+backend/logs/
+
+# Editor directories and files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Cache files
+.cache/
+frontend/.cache/
+.pytest_cache/
+backend/.pytest_cache/
+
+# Local development settings
+docker-compose.override.yml
+
+# Production files
+.vercel
+.netlify
+
+# Package files
+*.egg-info/
+*.egg
+backend/*.egg-info/
+backend/*.egg
+
+# Database files
+*.db
+*.sqlite3
+
+# Temporary files
+.tmp/
+temp/
+tmp/
