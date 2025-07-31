@@ -1,5 +1,6 @@
 import boto3
 import logging
+import asyncio
 from typing import Dict, List, Any
 from app.schemas.aws import AWSCredentials, ResourceSummary
 
@@ -36,153 +37,173 @@ class AWSService:
             return False
             
     async def get_resource_summary(self) -> Dict[str, Any]:
-        """Get summary of AWS resources across multiple services"""
+        """Get summary of AWS resources across multiple services and regions concurrently."""
         session = self._get_session()
-        summary = {}
         
-        # Get EC2 instances
         try:
-            ec2 = session.resource('ec2')
-            instances = list(ec2.instances.all())
-            summary['ec2'] = {
-                'count': len(instances),
-                'running': len([i for i in instances if i.state['Name'] == 'running']),
-                'stopped': len([i for i in instances if i.state['Name'] == 'stopped'])
-            }
+            ec2_main_client = session.client('ec2')
+            all_regions = [region['RegionName'] for region in ec2_main_client.describe_regions()['Regions']]
         except Exception as e:
-            logger.error(f"Error getting EC2 summary: {str(e)}")
-            summary['ec2'] = {'error': str(e)}
-            
-        # Get S3 buckets
+            logger.error(f"Failed to describe regions: {e}")
+            all_regions = [session.region_name]
+
+        def _get_ec2_summary_sync(region):
+            try:
+                regional_ec2 = boto3.resource('ec2', aws_access_key_id=self.credentials.access_key, aws_secret_access_key=self.credentials.secret_key, region_name=region, aws_session_token=self.credentials.session_token)
+                instances = list(regional_ec2.instances.all())
+                return {'count': len(instances), 'running': len([i for i in instances if i.state['Name'] == 'running']), 'stopped': len([i for i in instances if i.state['Name'] == 'stopped']), 'error': None}
+            except Exception as e:
+                if 'UnauthorizedOperation' not in str(e) and 'AccessDenied' not in str(e):
+                    return {'count': 0, 'running': 0, 'stopped': 0, 'error': f"{region}: Access denied or region not enabled."}
+                return {'count': 0, 'running': 0, 'stopped': 0, 'error': None}
+
+        def _get_rds_summary_sync(region):
+            count = 0
+            try:
+                regional_rds = boto3.client('rds', aws_access_key_id=self.credentials.access_key, aws_secret_access_key=self.credentials.secret_key, region_name=region, aws_session_token=self.credentials.session_token)
+                paginator = regional_rds.get_paginator('describe_db_instances')
+                for page in paginator.paginate():
+                    count += len(page.get('DBInstances', []))
+                return {'count': count, 'error': None}
+            except Exception as e:
+                if 'UnauthorizedOperation' not in str(e) and 'AccessDenied' not in str(e):
+                    return {'count': 0, 'error': f"{region}: Access denied or region not enabled."}
+                return {'count': 0, 'error': None}
+
+        def _get_lambda_summary_sync(region):
+            count = 0
+            try:
+                regional_lambda = boto3.client('lambda', aws_access_key_id=self.credentials.access_key, aws_secret_access_key=self.credentials.secret_key, region_name=region, aws_session_token=self.credentials.session_token)
+                paginator = regional_lambda.get_paginator('list_functions')
+                for page in paginator.paginate():
+                    count += len(page.get('Functions', []))
+                return {'count': count, 'error': None}
+            except Exception as e:
+                if 'UnauthorizedOperation' not in str(e) and 'AccessDenied' not in str(e):
+                    return {'count': 0, 'error': f"{region}: Access denied or region not enabled."}
+                return {'count': 0, 'error': None}
+
+        # Run blocking boto3 calls in separate threads
+        ec2_tasks = [asyncio.to_thread(_get_ec2_summary_sync, r) for r in all_regions]
+        rds_tasks = [asyncio.to_thread(_get_rds_summary_sync, r) for r in all_regions]
+        lambda_tasks = [asyncio.to_thread(_get_lambda_summary_sync, r) for r in all_regions]
+
+        ec2_results, rds_results, lambda_results = await asyncio.gather(
+            asyncio.gather(*ec2_tasks),
+            asyncio.gather(*rds_tasks),
+            asyncio.gather(*lambda_tasks)
+        )
+
+        # Aggregate results
+        summary_ec2 = {'count': sum(r['count'] for r in ec2_results), 'running': sum(r['running'] for r in ec2_results), 'stopped': sum(r['stopped'] for r in ec2_results)}
+        ec2_errors = [r['error'] for r in ec2_results if r['error']]
+        if ec2_errors: summary_ec2['error'] = "; ".join(ec2_errors)
+
+        summary_rds = {'count': sum(r['count'] for r in rds_results)}
+        rds_errors = [r['error'] for r in rds_results if r['error']]
+        if rds_errors: summary_rds['error'] = "; ".join(rds_errors)
+
+        summary_lambda = {'count': sum(r['count'] for r in lambda_results)}
+        lambda_errors = [r['error'] for r in lambda_results if r['error']]
+        if lambda_errors: summary_lambda['error'] = "; ".join(lambda_errors)
+
         try:
             s3 = session.resource('s3')
-            buckets = list(s3.buckets.all())
-            summary['s3'] = {
-                'count': len(buckets)
-            }
+            summary_s3 = {'count': len(list(s3.buckets.all()))}
         except Exception as e:
             logger.error(f"Error getting S3 summary: {str(e)}")
-            summary['s3'] = {'error': str(e)}
-            
-        # Get RDS instances
-        try:
-            rds = session.client('rds')
-            instances = rds.describe_db_instances()
-            summary['rds'] = {
-                'count': len(instances.get('DBInstances', []))
-            }
-        except Exception as e:
-            logger.error(f"Error getting RDS summary: {str(e)}")
-            summary['rds'] = {'error': str(e)}
-            
-        # Get Lambda functions
-        try:
-            lambda_client = session.client('lambda')
-            functions = lambda_client.list_functions()
-            summary['lambda'] = {
-                'count': len(functions.get('Functions', []))
-            }
-        except Exception as e:
-            logger.error(f"Error getting Lambda summary: {str(e)}")
-            summary['lambda'] = {'error': str(e)}
-            
-        # Add more services as needed
-        
-        return summary
+            summary_s3 = {'error': str(e)}
+
+        return {'ec2': summary_ec2, 'rds': summary_rds, 'lambda': summary_lambda, 's3': summary_s3}
         
     async def get_resources(self, service: str) -> Dict[str, Any]:
-        """Get detailed resources for a specific AWS service"""
+        """Get detailed resources for a specific AWS service across all regions concurrently."""
         session = self._get_session()
         
-        if service == 'ec2':
-            ec2 = session.resource('ec2')
-            instances = list(ec2.instances.all())
-            return {
-                'instances': [
-                    {
-                        'id': i.id,
-                        'type': i.instance_type,
-                        'state': i.state['Name'],
-                        'public_ip': i.public_ip_address,
-                        'private_ip': i.private_ip_address,
-                        'launch_time': i.launch_time.isoformat() if hasattr(i, 'launch_time') else None,
-                        'tags': {t['Key']: t['Value'] for t in i.tags or []}
-                    }
-                    for i in instances
-                ]
-            }
-            
-        elif service == 's3':
+        try:
+            ec2_main_client = session.client('ec2')
+            all_regions = [region['RegionName'] for region in ec2_main_client.describe_regions()['Regions']]
+        except Exception as e:
+            logger.error(f"Failed to describe regions: {e}")
+            all_regions = [session.region_name]
+
+        def _get_regional_resources_sync(region):
+            try:
+                if service == 'ec2':
+                    regional_ec2 = boto3.resource('ec2', aws_access_key_id=self.credentials.access_key, aws_secret_access_key=self.credentials.secret_key, region_name=region, aws_session_token=self.credentials.session_token)
+                    return [{'id': i.id, 'type': i.instance_type, 'state': i.state['Name'], 'public_ip': i.public_ip_address, 'private_ip': i.private_ip_address, 'launch_time': i.launch_time.isoformat() if hasattr(i, 'launch_time') else None, 'tags': {t['Key']: t['Value'] for t in i.tags or []}, 'region': region} for i in regional_ec2.instances.all()]
+                elif service == 'rds':
+                    regional_rds = boto3.client('rds', aws_access_key_id=self.credentials.access_key, aws_secret_access_key=self.credentials.secret_key, region_name=region, aws_session_token=self.credentials.session_token)
+                    paginator = regional_rds.get_paginator('describe_db_instances')
+                    instances = []
+                    for page in paginator.paginate():
+                        instances.extend([{'id': i['DBInstanceIdentifier'], 'engine': i['Engine'], 'status': i['DBInstanceStatus'], 'size': i['DBInstanceClass'], 'storage': i['AllocatedStorage'], 'endpoint': i.get('Endpoint', {}).get('Address') if 'Endpoint' in i else None, 'region': region} for i in page.get('DBInstances', [])])
+                    return instances
+                elif service == 'lambda':
+                    regional_lambda = boto3.client('lambda', aws_access_key_id=self.credentials.access_key, aws_secret_access_key=self.credentials.secret_key, region_name=region, aws_session_token=self.credentials.session_token)
+                    paginator = regional_lambda.get_paginator('list_functions')
+                    functions = []
+                    for page in paginator.paginate():
+                        functions.extend([{'name': f['FunctionName'], 'runtime': f['Runtime'], 'memory': f['MemorySize'], 'timeout': f['Timeout'], 'last_modified': f['LastModified'], 'region': region} for f in page.get('Functions', [])])
+                    return functions
+            except Exception as e:
+                if 'UnauthorizedOperation' not in str(e) and 'AccessDenied' not in str(e):
+                    logger.warning(f"Could not get {service} resources in {region}: {str(e)}")
+            return []
+
+        if service == 's3':
             s3 = session.resource('s3')
-            return {
-                'buckets': [
-                    {
-                        'name': b.name,
-                        'creation_date': b.creation_date.isoformat() if hasattr(b, 'creation_date') else None
-                    }
-                    for b in s3.buckets.all()
-                ]
-            }
-            
-        elif service == 'rds':
-            rds = session.client('rds')
-            instances = rds.describe_db_instances()
-            return {
-                'instances': [
-                    {
-                        'id': i['DBInstanceIdentifier'],
-                        'engine': i['Engine'],
-                        'status': i['DBInstanceStatus'],
-                        'size': i['DBInstanceClass'],
-                        'storage': i['AllocatedStorage'],
-                        'endpoint': i.get('Endpoint', {}).get('Address') if 'Endpoint' in i else None
-                    }
-                    for i in instances.get('DBInstances', [])
-                ]
-            }
-            
-        elif service == 'lambda':
-            lambda_client = session.client('lambda')
-            functions = lambda_client.list_functions()
-            return {
-                'functions': [
-                    {
-                        'name': f['FunctionName'],
-                        'runtime': f['Runtime'],
-                        'memory': f['MemorySize'],
-                        'timeout': f['Timeout'],
-                        'last_modified': f['LastModified']
-                    }
-                    for f in functions.get('Functions', [])
-                ]
-            }
-        
-        # Add more services as needed
-        
+            return {'buckets': [{'name': b.name, 'creation_date': b.creation_date.isoformat() if hasattr(b, 'creation_date') else None} for b in s3.buckets.all()]}
+
+        if service in ['ec2', 'rds', 'lambda']:
+            tasks = [asyncio.to_thread(_get_regional_resources_sync, r) for r in all_regions]
+            results = await asyncio.gather(*tasks)
+            flat_list = [item for sublist in results for item in sublist]
+            return {'instances' if service in ['ec2', 'rds'] else 'functions': flat_list}
+
         return {"error": f"Service {service} not supported"}
         
     async def get_resource_tags(self, service: str) -> Dict[str, List[str]]:
-        """Get all tags used in a specific service"""
+        """Get all tags used in a specific service across all regions concurrently."""
         session = self._get_session()
-        tag_dict = {}
+        if service != 'ec2':
+            return {}
+
+        try:
+            ec2_main_client = session.client('ec2')
+            all_regions = [region['RegionName'] for region in ec2_main_client.describe_regions()['Regions']]
+        except Exception as e:
+            logger.error(f"Failed to describe regions for tag collection: {e}")
+            all_regions = [session.region_name]
+
+        def _get_tags_for_region_sync(region):
+            tags = {}
+            try:
+                regional_ec2 = boto3.resource('ec2', aws_access_key_id=self.credentials.access_key, aws_secret_access_key=self.credentials.secret_key, region_name=region, aws_session_token=self.credentials.session_token)
+                for instance in regional_ec2.instances.all():
+                    if instance.tags:
+                        for tag in instance.tags:
+                            key, value = tag['Key'], tag['Value']
+                            if key not in tags:
+                                tags[key] = set()
+                            tags[key].add(value)
+            except Exception as e:
+                if 'UnauthorizedOperation' not in str(e) and 'AccessDenied' not in str(e):
+                    logger.warning(f"Could not get EC2 tags in {region}: {str(e)}")
+            return tags
+
+        tasks = [asyncio.to_thread(_get_tags_for_region_sync, r) for r in all_regions]
+        results = await asyncio.gather(*tasks)
         
-        if service == 'ec2':
-            ec2 = session.resource('ec2')
-            instances = list(ec2.instances.all())
-            
-            for instance in instances:
-                if instance.tags:
-                    for tag in instance.tags:
-                        key = tag['Key']
-                        value = tag['Value']
-                        if key not in tag_dict:
-                            tag_dict[key] = []
-                        if value not in tag_dict[key]:
-                            tag_dict[key].append(value)
+        # Aggregate tags
+        final_tags = {}
+        for regional_tags in results:
+            for key, value_set in regional_tags.items():
+                if key not in final_tags:
+                    final_tags[key] = set()
+                final_tags[key].update(value_set)
         
-        # Add more services as needed
-                            
-        return tag_dict
+        return {key: list(value_set) for key, value_set in final_tags.items()}
         
     async def get_service_cost(self, service: str, period: str = None) -> Dict[str, Any]:
         """Get cost data for a specific service for different time periods

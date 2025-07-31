@@ -46,6 +46,7 @@ const Login = () => {
         setAWSCredentials({
           accessKey,
           secretKey,
+          region: awsCredentials.region,
           sessionToken: sessionToken || undefined
         });
         

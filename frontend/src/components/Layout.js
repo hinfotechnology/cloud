@@ -17,6 +17,7 @@ const navigation = [
   { name: 'Resources', href: '/resources', icon: ServerIcon },
   { name: 'Policies', href: '/policies', icon: ShieldCheckIcon },
   { name: 'Service Costs', href: '/service-costs', icon: CurrencyDollarIcon },
+  { name: 'List Services', href: '/listservices', icon: ServerIcon },
 ];
 
 const Layout = ({ children }) => {

@@ -10,6 +10,7 @@ import ResourceDetailPage from './pages/ResourceDetailPage';
 import ServiceCostsPage from './pages/ServiceCostsPage';
 import { useAWSCredentials } from './context/AWSCredentialsContext';
 import { useSSOAuth } from './context/SSOAuthContext';
+import ListServicesPage from './pages/ListServicesPage';
 
 function App() {
   const { credentials } = useAWSCredentials();
@@ -63,6 +64,13 @@ function App() {
         <ProtectedRoute>
           <Layout>
             <ServiceCostsPage />
+          </Layout>
+        </ProtectedRoute>
+      } />
+      <Route path="/listservices" element={
+        <ProtectedRoute>
+          <Layout>
+            <ListServicesPage />
           </Layout>
         </ProtectedRoute>
       } />
